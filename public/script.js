@@ -3672,7 +3672,9 @@ class StreamingProcessor {
             // Token count update.
             if (isFinal && power_user.message_token_count_enabled) {
                 const apiTokens = getApiCompletionTokens(this.apiUsage);
-                if (apiTokens !== null) {
+                if (apiTokens !== null && this.type === 'continue' && typeof chat[messageId].extra?.token_count === 'number') {
+                    chat[messageId].extra.token_count += apiTokens;
+                } else if (apiTokens !== null && this.type !== 'continue') {
                     chat[messageId].extra.token_count = apiTokens;
                 } else {
                     const tokenCountText = this.reasoningHandler.reasoning + processedText;
@@ -6720,8 +6722,8 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         }
         if (power_user.message_token_count_enabled) {
             const apiTokens = getApiCompletionTokens(apiUsage);
-            if (apiTokens !== null) {
-                lastMessage.extra.token_count = apiTokens;
+            if (apiTokens !== null && typeof lastMessage.extra.token_count === 'number') {
+                lastMessage.extra.token_count += apiTokens;
             } else {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
                 lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
@@ -6750,8 +6752,8 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
             const apiTokens = getApiCompletionTokens(apiUsage);
-            if (apiTokens !== null) {
-                lastMessage.extra.token_count = apiTokens;
+            if (apiTokens !== null && typeof lastMessage.extra.token_count === 'number') {
+                lastMessage.extra.token_count += apiTokens;
             } else {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
                 lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
