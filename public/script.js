@@ -107,6 +107,7 @@ import {
     openai_messages_count,
     chat_completion_sources,
     getChatCompletionModel,
+    getApiCompletionTokens,
     proxies,
     loadProxyPresets,
     selected_proxy,
@@ -2635,13 +2636,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
     messageElement.find('.ch_name .name_text').text(mes.name);
     messageElement.find('.timestamp').text(timestamp).attr('title', `${mes.extra?.api ? mes.extra.api + ' - ' : ''}${mes.extra?.model ?? ''}`);
     messageElement.find('.mesIDDisplay').text(`#${messageId}`);
-    const apiUsage = mes.extra?.api_usage;
-    if (apiUsage) {
-        const completion = apiUsage.completion_tokens ?? apiUsage.output_tokens ?? apiUsage.totalTokenCount ?? 0;
-        messageElement.find('.tokenCounterDisplay').text(`${completion}t`);
-    } else if (tokenCount) {
-        messageElement.find('.tokenCounterDisplay').text(`${tokenCount}t`);
-    }
+    tokenCount && messageElement.find('.tokenCounterDisplay').text(`${tokenCount}t`);
     mes.title && messageElement.attr('title', mes.title);
     timerValue && messageElement.find('.mes_timer').attr('title', timerTitle).text(timerValue);
     bookmarkLink && updateBookmarkDisplay(messageElement);
@@ -3675,10 +3670,17 @@ class StreamingProcessor {
             processedText = chat[messageId].mes;
 
             // Token count update.
-            const tokenCountText = this.reasoningHandler.reasoning + processedText;
-            const currentTokenCount = isFinal && power_user.message_token_count_enabled ? await getTokenCountAsync(tokenCountText, 0) : 0;
-            if (currentTokenCount) {
-                chat[messageId].extra.token_count = currentTokenCount;
+            if (isFinal && power_user.message_token_count_enabled) {
+                const apiTokens = getApiCompletionTokens(this.apiUsage);
+                if (apiTokens !== null) {
+                    chat[messageId].extra.token_count = apiTokens;
+                } else {
+                    const tokenCountText = this.reasoningHandler.reasoning + processedText;
+                    const localTokens = await getTokenCountAsync(tokenCountText, 0);
+                    if (localTokens) {
+                        chat[messageId].extra.token_count = localTokens;
+                    }
+                }
             }
 
             // Save API-reported usage from streaming
@@ -3687,12 +3689,9 @@ class StreamingProcessor {
             }
 
             if (this.messageTokenCounterDom instanceof HTMLElement) {
-                const apiUsage = chat[messageId].extra?.api_usage;
-                if (apiUsage) {
-                    const completion = apiUsage.completion_tokens ?? apiUsage.output_tokens ?? apiUsage.totalTokenCount ?? 0;
-                    this.messageTokenCounterDom.textContent = `${completion}t`;
-                } else if (currentTokenCount) {
-                    this.messageTokenCounterDom.textContent = `${currentTokenCount}t`;
+                const tokenCount = chat[messageId].extra?.token_count;
+                if (tokenCount) {
+                    this.messageTokenCounterDom.textContent = `${tokenCount}t`;
                 }
             }
 
@@ -3723,7 +3722,7 @@ class StreamingProcessor {
                 }
             }
 
-            const timePassed = formatGenerationTimer(this.timeStarted, currentTime, currentTokenCount, this.reasoningHandler.getDuration(), this.timeToFirstToken);
+            const timePassed = formatGenerationTimer(this.timeStarted, currentTime, chat[messageId].extra?.token_count, this.reasoningHandler.getDuration(), this.timeToFirstToken);
             if (this.messageTimerDom instanceof HTMLElement) {
                 this.messageTimerDom.textContent = timePassed.timerValue;
                 this.messageTimerDom.title = timePassed.timerTitle;
@@ -5486,7 +5485,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         let reasoning = extractReasoningFromData(data);
         let imageUrls = extractImagesFromData(data);
         const reasoningSignature = extractReasoningSignatureFromData(data);
-        const apiUsage = data?.usage ?? null;
+        const apiUsage = data?.usage ?? data?.usageMetadata ?? data?.meta?.tokens ?? data?.meta?.billed_units ?? null;
         kobold_horde_model = title;
 
         const swipes = extractMultiSwipes(data, type);
@@ -6687,8 +6686,13 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
                 lastMessage.extra.api_usage = apiUsage;
             }
             if (power_user.message_token_count_enabled) {
-                const tokenCountText = (reasoning || '') + lastMessage.mes;
-                lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+                const apiTokens = getApiCompletionTokens(apiUsage);
+                if (apiTokens !== null) {
+                    lastMessage.extra.token_count = apiTokens;
+                } else {
+                    const tokenCountText = (reasoning || '') + lastMessage.mes;
+                    lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+                }
             }
             const chat_id = (chat.length - 1);
             !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
@@ -6715,8 +6719,13 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.api_usage = apiUsage;
         }
         if (power_user.message_token_count_enabled) {
-            const tokenCountText = (reasoning || '') + lastMessage.mes;
-            lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            const apiTokens = getApiCompletionTokens(apiUsage);
+            if (apiTokens !== null) {
+                lastMessage.extra.token_count = apiTokens;
+            } else {
+                const tokenCountText = (reasoning || '') + lastMessage.mes;
+                lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            }
         }
         const chat_id = (chat.length - 1);
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
@@ -6740,8 +6749,13 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         }
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
-            const tokenCountText = (reasoning || '') + lastMessage.mes;
-            lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            const apiTokens = getApiCompletionTokens(apiUsage);
+            if (apiTokens !== null) {
+                lastMessage.extra.token_count = apiTokens;
+            } else {
+                const tokenCountText = (reasoning || '') + lastMessage.mes;
+                lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            }
         }
         const chat_id = (chat.length - 1);
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
@@ -6769,8 +6783,13 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         newMessage.gen_finished = generationFinished;
 
         if (power_user.message_token_count_enabled) {
-            const tokenCountText = (reasoning || '') + newMessage.mes;
-            newMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            const apiTokens = getApiCompletionTokens(apiUsage);
+            if (apiTokens !== null) {
+                newMessage.extra.token_count = apiTokens;
+            } else {
+                const tokenCountText = (reasoning || '') + newMessage.mes;
+                newMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
+            }
         }
 
         if (apiUsage) {
