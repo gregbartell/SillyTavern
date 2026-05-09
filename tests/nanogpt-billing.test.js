@@ -13,8 +13,9 @@ function makeResponse({
     completionTokens = 567,
     pricing = {},
     usage = {},
+    cache = null,
 } = {}) {
-    return {
+    const response = {
         model,
         x_nanogpt_pricing: {
             provider,
@@ -31,6 +32,12 @@ function makeResponse({
             ...usage,
         },
     };
+
+    if (cache) {
+        response.x_nanogpt_cache = cache;
+    }
+
+    return response;
 }
 
 describe('NanoGPT billing metadata', () => {
@@ -81,10 +88,48 @@ describe('NanoGPT billing metadata', () => {
         expect(display.line1).toBe('cost: $0.000003 in/out: 1234t/567t cache r/w: 1000t/500t cache cost: $0.000002 TTL: 5m');
     });
 
+    test('captures NanoGPT amount pricing and cache metadata response shape', () => {
+        const entry = createNanoGptBillingEntryFromResponse({
+            id: 'msg_014QWSN7eHqs56h7QmP9ukjE',
+            object: 'chat.completion',
+            model: 'anthropic/claude-opus-4.6:thinking:medium',
+            choices: [],
+            usage: {
+                prompt_tokens: 113,
+                completion_tokens: 51,
+                total_tokens: 164,
+                cache_creation_input_tokens: 100,
+                cache_read_input_tokens: 20,
+                input_tokens: 113,
+            },
+            x_nanogpt_pricing: {
+                amount: 0.001840131,
+                currency: 'USD',
+            },
+            x_nanogpt_cache: {
+                requested: true,
+                enabledForDispatch: true,
+                supported: true,
+                status: 'requested_unknown',
+                ttl: '5m',
+                readTokens: 20,
+                writeTokens: 100,
+            },
+        });
+
+        expect(entry.pricing.amount).toBe(0.001840131);
+        expect(entry.cache.ttl).toBe('5m');
+
+        const display = formatNanoGptBillingDisplay({ requests: [entry] });
+        expect(display.line1).toBe('cost: $0.001840 in/out: 113t/51t cache r/w: 20t/100t TTL: 5m');
+        expect(display.line2).toBe('model: anthropic/claude-opus-4.6:thinking:medium');
+    });
+
     test('omits missing, zero, and inexact cache fields', () => {
         const noCache = createNanoGptBillingEntryFromResponse(makeResponse({
             pricing: { cache_cost: 0 },
             usage: { cache_read_tokens: 0, cache_write_tokens: 0 },
+            cache: { ttl: '5m' },
         }));
         expect(formatNanoGptBillingDisplay({ requests: [noCache] }).line1).toBe('cost: $0.000001 in/out: 1234t/567t');
 
@@ -100,6 +145,7 @@ describe('NanoGPT billing metadata', () => {
     test('returns no display for missing billing metadata', () => {
         expect(createNanoGptBillingEntryFromResponse({ usage: { prompt_tokens: 1, completion_tokens: 1 } })).toBeNull();
         expect(createNanoGptBillingEntryFromResponse({ x_nanogpt_pricing: { cost: 1 } })).toBeNull();
+        expect(createNanoGptBillingEntryFromResponse(makeResponse({ pricing: { currency: 'EUR' } }))).toBeNull();
         expect(formatNanoGptBillingDisplay({ requests: [] })).toBeNull();
     });
 
@@ -118,6 +164,7 @@ describe('NanoGPT billing metadata', () => {
             promptTokens: 100,
             completionTokens: 20,
             pricing: { cache_ttl_seconds: 300 },
+            usage: { cache_read_tokens: 1, cache_write_tokens: 2 },
         }), 'normal');
         const second = createNanoGptBillingEntryFromResponse(makeResponse({
             provider: 'Other',
@@ -126,13 +173,14 @@ describe('NanoGPT billing metadata', () => {
             promptTokens: 50,
             completionTokens: 30,
             pricing: { cache_ttl_seconds: 600 },
+            usage: { cache_read_tokens: 3, cache_write_tokens: 4 },
         }), 'continue');
 
         let metadata = mergeNanoGptBillingMetadata(undefined, first);
         metadata = mergeNanoGptBillingMetadata(metadata, second, { append: true });
 
         const display = formatNanoGptBillingDisplay(metadata);
-        expect(display.line1).toBe('cost: $0.000003 in/out: 150t/50t TTL: mixed');
+        expect(display.line1).toBe('cost: $0.000003 in/out: 150t/50t cache r/w: 4t/6t TTL: mixed');
         expect(display.line2).toBe('provider: mixed model: mixed requests: 2');
         expect(display.providerTitle).toBe('Auto\nOther');
         expect(display.modelTitle).toBe('moonshotai/kimi-k2.6\nother/model');

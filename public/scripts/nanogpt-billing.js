@@ -4,6 +4,7 @@ const MAX_OBJECT_DEPTH = 4;
 const SENSITIVE_KEY_PATTERN = /(?:account|team|payment|invoice|customer|email|api[_-]?key|secret|credential|wallet|balance|credit|subscription|organization|org_id)/i;
 
 const TOTAL_COST_PATHS = [
+    'amount',
     'cost',
     'total_cost',
     'totalCost',
@@ -32,6 +33,7 @@ const OUTPUT_TOKEN_PATHS = [
 ];
 
 const CACHE_READ_TOKEN_PATHS = [
+    'readTokens',
     'cache_read_tokens',
     'cache_read_input_tokens',
     'cached_tokens',
@@ -40,6 +42,7 @@ const CACHE_READ_TOKEN_PATHS = [
 ];
 
 const CACHE_WRITE_TOKEN_PATHS = [
+    'writeTokens',
     'cache_write_tokens',
     'cache_write_input_tokens',
     'cache_creation_tokens',
@@ -154,6 +157,16 @@ function toCost(value) {
 }
 
 /**
+ * Checks if a pricing object is denominated in USD when it declares a currency.
+ * @param {Record<string, any>} pricing Pricing metadata
+ * @returns {boolean}
+ */
+function isUsdPricing(pricing) {
+    const currency = toDisplayString(pricing.currency);
+    return !currency || currency.toUpperCase() === 'USD';
+}
+
+/**
  * Converts a value to a bounded string.
  * @param {unknown} value Value to convert
  * @returns {string|null}
@@ -248,13 +261,14 @@ export function createNanoGptBillingEntryFromResponse(data, type = 'normal', cre
     const inputTokens = toTokenCount(pickValue(data.usage, INPUT_TOKEN_PATHS));
     const outputTokens = toTokenCount(pickValue(data.usage, OUTPUT_TOKEN_PATHS));
 
-    if (totalCost === null || inputTokens === null || outputTokens === null) {
+    if (totalCost === null || inputTokens === null || outputTokens === null || !isUsdPricing(data.x_nanogpt_pricing)) {
         return null;
     }
 
     const { provider, model } = extractProviderModel(data, data.x_nanogpt_pricing);
     const pricing = sanitizeNanoGptMetadata(data.x_nanogpt_pricing);
     const usage = sanitizeNanoGptMetadata(data.usage);
+    const cache = isPlainObject(data.x_nanogpt_cache) ? sanitizeNanoGptMetadata(data.x_nanogpt_cache) : undefined;
 
     if (!isPlainObject(pricing) || !isPlainObject(usage)) {
         return null;
@@ -265,6 +279,7 @@ export function createNanoGptBillingEntryFromResponse(data, type = 'normal', cre
         model,
         pricing,
         usage,
+        ...(isPlainObject(cache) ? { cache } : {}),
         created_at: Number.isFinite(createdAt) ? createdAt : Date.now(),
         type: typeof type === 'string' && type ? type : 'normal',
     });
@@ -284,12 +299,13 @@ export function sanitizeNanoGptBillingRequest(request) {
     const inputTokens = toTokenCount(pickValue(request.usage, INPUT_TOKEN_PATHS));
     const outputTokens = toTokenCount(pickValue(request.usage, OUTPUT_TOKEN_PATHS));
 
-    if (totalCost === null || inputTokens === null || outputTokens === null) {
+    if (totalCost === null || inputTokens === null || outputTokens === null || !isUsdPricing(request.pricing)) {
         return null;
     }
 
     const pricing = sanitizeNanoGptMetadata(request.pricing);
     const usage = sanitizeNanoGptMetadata(request.usage);
+    const cache = isPlainObject(request.cache) ? sanitizeNanoGptMetadata(request.cache) : undefined;
 
     if (!isPlainObject(pricing) || !isPlainObject(usage)) {
         return null;
@@ -302,6 +318,7 @@ export function sanitizeNanoGptBillingRequest(request) {
         model: toDisplayString(request.model),
         pricing,
         usage,
+        ...(isPlainObject(cache) ? { cache } : {}),
         created_at: createdAt,
         type: typeof request.type === 'string' && request.type ? request.type.slice(0, 64) : 'normal',
     };
@@ -381,10 +398,10 @@ function getRequestMetrics(request) {
         totalCost,
         inputTokens,
         outputTokens,
-        cacheReadTokens: toTokenCount(pickValue(request.usage, CACHE_READ_TOKEN_PATHS)),
-        cacheWriteTokens: toTokenCount(pickValue(request.usage, CACHE_WRITE_TOKEN_PATHS)),
+        cacheReadTokens: toTokenCount(pickValue(request.usage, CACHE_READ_TOKEN_PATHS) ?? pickValue(request.cache, CACHE_READ_TOKEN_PATHS)),
+        cacheWriteTokens: toTokenCount(pickValue(request.usage, CACHE_WRITE_TOKEN_PATHS) ?? pickValue(request.cache, CACHE_WRITE_TOKEN_PATHS)),
         cacheCost: toCost(pickValue(request.pricing, CACHE_COST_PATHS)),
-        ttl: formatTtl(pickValue(request.pricing, TTL_PATHS) ?? pickValue(request.usage, TTL_PATHS)),
+        ttl: formatTtl(pickValue(request.pricing, TTL_PATHS) ?? pickValue(request.usage, TTL_PATHS) ?? pickValue(request.cache, TTL_PATHS)),
     };
 }
 
@@ -527,7 +544,7 @@ export function formatNanoGptBillingDisplay(nanogptMetadata) {
         line1.push(`cache cost: ${formatNanoGptUsd(summary.cacheCost)}`);
     }
 
-    if (summary.ttl) {
+    if (hasCacheFields && summary.ttl) {
         line1.push(`TTL: ${summary.ttl}`);
     }
 
