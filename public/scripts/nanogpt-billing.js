@@ -527,45 +527,25 @@ export function formatNanoGptBillingDisplay(nanogptMetadata) {
         return null;
     }
 
-    const line1 = [
-        `cost: ${formatNanoGptUsd(summary.totalCost)}`,
-        `in/out: ${summary.inputTokens}t/${summary.outputTokens}t`,
-    ];
-
     const hasCacheTokens = summary.cacheReadTokens > 0 || summary.cacheWriteTokens > 0;
     const hasCacheCost = summary.cacheCost !== null && summary.cacheCost > 0;
-    const hasCacheFields = hasCacheTokens || hasCacheCost;
+    const totalCost = formatNanoGptUsd(summary.totalCost);
+    const cacheCost = hasCacheCost ? formatNanoGptUsd(summary.cacheCost) : null;
+    const line1 = [`cost: ${totalCost}`];
+    const title = [`in/out: ${summary.inputTokens}t/${summary.outputTokens}t`];
 
-    if (hasCacheFields && hasCacheTokens) {
-        line1.push(`cache r/w: ${summary.cacheReadTokens}t/${summary.cacheWriteTokens}t`);
-    }
-
-    if (hasCacheFields && summary.cacheCost !== null) {
-        line1.push(`cache cost: ${formatNanoGptUsd(summary.cacheCost)}`);
-    }
-
-    if (hasCacheFields && summary.ttl) {
-        line1.push(`TTL: ${summary.ttl}`);
+    if (cacheCost) {
+        line1.push(`cache: ${cacheCost}`);
     }
 
-    const line2 = [];
-    if (summary.provider) {
-        line2.push(`provider: ${summary.provider}`);
-    }
-    if (summary.model) {
-        line2.push(`model: ${summary.model}`);
-    }
-    if (summary.requests > 1) {
-        line2.push(`requests: ${summary.requests}`);
+    if (hasCacheTokens) {
+        title.push(`cache: ${summary.cacheReadTokens}t/${summary.cacheWriteTokens}t`);
     }
 
     return {
         line1: line1.join(' '),
-        line2: line2.join(' '),
-        provider: summary.provider,
-        providerTitle: summary.providerTitle,
-        model: summary.model,
-        modelTitle: summary.modelTitle,
-        requests: summary.requests,
+        totalCost,
+        cacheCost,
+        title: title.join(' '),
     };
 }

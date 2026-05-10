@@ -655,29 +655,8 @@ body.nanogptShowBilling .nanogptBillingDisplay:not([hidden]) {
     white-space: nowrap;
 }
 
-.nanogptBillingLineProvider {
-    display: flex;
-    align-items: baseline;
-}
-
-.nanogptBillingProviderValue,
-.nanogptBillingModelValue {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.nanogptBillingProviderValue {
-    max-width: 28%;
-}
-
-.nanogptBillingModelValue {
-    max-width: 45%;
-}
-
-.nanogptBillingRequests {
-    flex: 0 0 auto;
+.nanogptBillingCostValue {
+    font-weight: 700;
 }
 
 .mes_translate,

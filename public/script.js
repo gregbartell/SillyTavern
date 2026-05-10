@@ -2593,35 +2593,18 @@ function updateNanoGptBillingDisplay(messageElement, mes) {
     display.prop('hidden', !formatted);
 
     if (!formatted) {
-        display.find('.nanogptBillingLinePrimary').text('');
-        display.find('.nanogptBillingLineProvider').prop('hidden', true);
+        display.find('.nanogptBillingLinePrimary').attr('title', '');
+        display.find('.nanogptBillingCostValue').text('');
+        display.find('.nanogptBillingCacheCost').prop('hidden', true);
         return;
     }
 
-    display.find('.nanogptBillingLinePrimary').text(formatted.line1);
-
-    const providerLine = display.find('.nanogptBillingLineProvider');
-    const hasProvider = Boolean(formatted.provider);
-    const hasModel = Boolean(formatted.model);
-    const hasRequests = formatted.requests > 1;
-    providerLine.prop('hidden', !(hasProvider || hasModel || hasRequests));
-
-    display.find('.nanogptBillingProviderLabel').toggle(hasProvider);
-    display.find('.nanogptBillingProviderValue')
-        .toggle(hasProvider)
-        .text(formatted.provider ?? '')
-        .attr('title', formatted.providerTitle || formatted.provider || '');
-
-    display.find('.nanogptBillingModelLabel')
-        .toggle(hasModel)
-        .text(hasProvider ? ' model: ' : 'model: ');
-    display.find('.nanogptBillingModelValue')
-        .toggle(hasModel)
-        .text(formatted.model ?? '')
-        .attr('title', formatted.modelTitle || formatted.model || '');
-
-    const requestsPrefix = hasProvider || hasModel ? ' requests: ' : 'requests: ';
-    display.find('.nanogptBillingRequests').text(hasRequests ? `${requestsPrefix}${formatted.requests}` : '');
+    display.find('.nanogptBillingLinePrimary').attr('title', formatted.title);
+    display.find('.nanogptBillingLinePrimary > .nanogptBillingCostValue').text(formatted.totalCost);
+    display.find('.nanogptBillingCacheCost')
+        .prop('hidden', !formatted.cacheCost)
+        .find('.nanogptBillingCacheCostValue')
+        .text(formatted.cacheCost ?? '');
 }
 
 /**

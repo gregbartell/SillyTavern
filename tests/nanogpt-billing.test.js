@@ -55,8 +55,11 @@ describe('NanoGPT billing metadata', () => {
         expect(entry.usage.team_id).toBeUndefined();
 
         const display = formatNanoGptBillingDisplay({ requests: [entry] });
-        expect(display.line1).toBe('cost: $0.000001 in/out: 1234t/567t');
-        expect(display.line2).toBe('provider: Auto model: moonshotai/kimi-k2.6');
+        expect(display.line1).toBe('cost: $0.000001');
+        expect(display.totalCost).toBe('$0.000001');
+        expect(display.cacheCost).toBeNull();
+        expect(display.title).toBe('in/out: 1234t/567t');
+        expect(display.line2).toBeUndefined();
     });
 
     test('captures final stream chunk metadata and ignores partial chunks', () => {
@@ -68,10 +71,10 @@ describe('NanoGPT billing metadata', () => {
         };
         const entry = createNanoGptBillingEntryFromResponse(finalChunk, 'normal', 1760000000001);
 
-        expect(formatNanoGptBillingDisplay({ requests: [entry] }).line1).toBe('cost: $0.000002 in/out: 10t/5t');
+        expect(formatNanoGptBillingDisplay({ requests: [entry] }).line1).toBe('cost: $0.000002');
     });
 
-    test('formats cache read/write, cache cost, and TTL when exact values exist', () => {
+    test('formats cache cost and moves token details to title', () => {
         const entry = createNanoGptBillingEntryFromResponse(makeResponse({
             cost: 0.000003,
             pricing: {
@@ -85,7 +88,10 @@ describe('NanoGPT billing metadata', () => {
         }));
 
         const display = formatNanoGptBillingDisplay({ requests: [entry] });
-        expect(display.line1).toBe('cost: $0.000003 in/out: 1234t/567t cache r/w: 1000t/500t cache cost: $0.000002 TTL: 5m');
+        expect(display.line1).toBe('cost: $0.000003 cache: $0.000002');
+        expect(display.totalCost).toBe('$0.000003');
+        expect(display.cacheCost).toBe('$0.000002');
+        expect(display.title).toBe('in/out: 1234t/567t cache: 1000t/500t');
     });
 
     test('captures NanoGPT amount pricing and cache metadata response shape', () => {
@@ -121,8 +127,9 @@ describe('NanoGPT billing metadata', () => {
         expect(entry.cache.ttl).toBe('5m');
 
         const display = formatNanoGptBillingDisplay({ requests: [entry] });
-        expect(display.line1).toBe('cost: $0.001840 in/out: 113t/51t cache r/w: 20t/100t TTL: 5m');
-        expect(display.line2).toBe('model: anthropic/claude-opus-4.6:thinking:medium');
+        expect(display.line1).toBe('cost: $0.001840');
+        expect(display.title).toBe('in/out: 113t/51t cache: 20t/100t');
+        expect(display.line2).toBeUndefined();
     });
 
     test('omits missing, zero, and inexact cache fields', () => {
@@ -131,15 +138,16 @@ describe('NanoGPT billing metadata', () => {
             usage: { cache_read_tokens: 0, cache_write_tokens: 0 },
             cache: { ttl: '5m' },
         }));
-        expect(formatNanoGptBillingDisplay({ requests: [noCache] }).line1).toBe('cost: $0.000001 in/out: 1234t/567t');
+        expect(formatNanoGptBillingDisplay({ requests: [noCache] }).line1).toBe('cost: $0.000001');
 
         const missingCacheCost = createNanoGptBillingEntryFromResponse(makeResponse({
             usage: { cache_read_tokens: 1000, cache_write_tokens: 500 },
         }));
         const display = formatNanoGptBillingDisplay({ requests: [missingCacheCost] });
 
-        expect(display.line1).toContain('cache r/w: 1000t/500t');
-        expect(display.line1).not.toContain('cache cost');
+        expect(display.line1).toBe('cost: $0.000001');
+        expect(display.title).toContain('cache: 1000t/500t');
+        expect(display.line1).not.toContain('cache:');
     });
 
     test('returns no display for missing billing metadata', () => {
@@ -158,7 +166,7 @@ describe('NanoGPT billing metadata', () => {
         expect(formatNanoGptBillingDisplay(metadata)).toBeNull();
     });
 
-    test('append/continue accumulates totals and shows request count with mixed TTL', () => {
+    test('append/continue accumulates totals and token details', () => {
         const first = createNanoGptBillingEntryFromResponse(makeResponse({
             cost: 0.000001,
             promptTokens: 100,
@@ -180,10 +188,9 @@ describe('NanoGPT billing metadata', () => {
         metadata = mergeNanoGptBillingMetadata(metadata, second, { append: true });
 
         const display = formatNanoGptBillingDisplay(metadata);
-        expect(display.line1).toBe('cost: $0.000003 in/out: 150t/50t cache r/w: 4t/6t TTL: mixed');
-        expect(display.line2).toBe('provider: mixed model: mixed requests: 2');
-        expect(display.providerTitle).toBe('Auto\nOther');
-        expect(display.modelTitle).toBe('moonshotai/kimi-k2.6\nother/model');
+        expect(display.line1).toBe('cost: $0.000003');
+        expect(display.title).toBe('in/out: 150t/50t cache: 4t/6t');
+        expect(display.line2).toBeUndefined();
     });
 
     test('selected swipe extra controls the displayed billing metadata', () => {
@@ -207,7 +214,7 @@ describe('NanoGPT billing metadata', () => {
         message.extra = structuredClone(message.swipe_info[message.swipe_id].extra);
 
         const display = formatNanoGptBillingDisplay(message.extra.nanogpt);
-        expect(display.line1).toBe('cost: $0.000002 in/out: 1234t/567t');
-        expect(display.model).toBe('second/model');
+        expect(display.line1).toBe('cost: $0.000002');
+        expect(display.model).toBeUndefined();
     });
 });
