@@ -81,6 +81,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
+import { extractChatCompletionResponseMetadata, hasChatCompletionResponseMetadata, mergeChatCompletionResponseMetadata } from './chat-completion-metadata.js';
 
 export {
     openai_messages_count,
@@ -3107,6 +3108,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             const swipes = [];
             const toolCalls = [];
             let apiUsage = null;
+            let responseMetadata = null;
             const state = { reasoning: '', images: [], signature: '', toolSignatures: {} };
             while (true) {
                 const { done, value } = await reader.read();
@@ -3123,9 +3125,15 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
                 const chunkUsage = parsed.usage
                     || parsed.usageMetadata
                     || parsed.meta?.tokens
+                    || parsed.meta?.billed_units
                     || null;
                 if (chunkUsage) {
                     apiUsage = chunkUsage;
+                }
+
+                const chunkMetadata = extractChatCompletionResponseMetadata(parsed, chunkUsage);
+                if (hasChatCompletionResponseMetadata(chunkMetadata)) {
+                    responseMetadata = mergeChatCompletionResponseMetadata(responseMetadata, chunkMetadata);
                 }
 
                 if (canMultiSwipe && Array.isArray(parsed?.choices) && parsed?.choices?.[0]?.index > 0) {
@@ -3138,7 +3146,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
 
                 ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures);
 
-                yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state, usage: apiUsage };
+                yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state, usage: apiUsage, responseMetadata };
             }
         };
     } else {

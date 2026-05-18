@@ -166,6 +166,18 @@ declare global {
         content: string;
     }
 
+    interface ChatCompletionResponseMetadataEvent {
+        messageId: number;
+        swipeId: number | null;
+        type: string;
+        originalType?: string;
+        fromStreaming: boolean;
+        chatCompletionSource: string;
+        model: string | null;
+        usage: object | null;
+        providerMetadata: Record<string, unknown>;
+    }
+
     // Global namespace modules
     interface Window {
         ai: any;

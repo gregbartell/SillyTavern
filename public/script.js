@@ -289,6 +289,7 @@ import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
+import { extractChatCompletionResponseMetadata, hasChatCompletionResponseMetadata } from './scripts/chat-completion-metadata.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -3512,6 +3513,38 @@ function hideStopButton() {
     }
 }
 
+/**
+ * Emits sanitized Chat Completion response metadata for extension consumers.
+ * @param {object} options Event options
+ * @param {number|null} options.messageId Saved message ID
+ * @param {string} options.type Generation type after save
+ * @param {string} options.originalType Original generation type
+ * @param {boolean} options.fromStreaming Whether the response came from streaming
+ * @param {{ usage?: object|null, providerMetadata?: Record<string, unknown> }|null} options.metadata Extracted response metadata
+ */
+async function emitChatCompletionResponseMetadata({ messageId, type, originalType, fromStreaming, metadata }) {
+    if (main_api !== 'openai' || !Number.isInteger(messageId) || !hasChatCompletionResponseMetadata(metadata)) {
+        return;
+    }
+
+    const message = chat[messageId];
+    if (!message || message.is_user || message.is_system) {
+        return;
+    }
+
+    await eventSource.emit(event_types.CHAT_COMPLETION_RESPONSE_METADATA, {
+        messageId,
+        swipeId: Number.isInteger(message.swipe_id) ? message.swipe_id : null,
+        type,
+        originalType,
+        fromStreaming,
+        chatCompletionSource: oai_settings.chat_completion_source,
+        model: getChatCompletionModel(oai_settings) ?? message.extra?.model ?? null,
+        usage: metadata?.usage ?? null,
+        providerMetadata: metadata?.providerMetadata ?? {},
+    });
+}
+
 class StreamingProcessor {
     /**
      * Creates a new streaming processor.
@@ -3560,6 +3593,8 @@ class StreamingProcessor {
         this.reasoningSignature = null;
         /** @type {object?} */
         this.apiUsage = null;
+        /** @type {object?} */
+        this.chatCompletionResponseMetadata = null;
     }
 
     /**
@@ -3807,6 +3842,13 @@ class StreamingProcessor {
         if (!isAborted && power_user.auto_swipe && generatedTextFiltered(text)) {
             return await swipe(null, SWIPE_DIRECTION.RIGHT, { source: SWIPE_SOURCE.AUTO_SWIPE, repeated: true, forceMesId: chat.length - 1 });
         }
+        await emitChatCompletionResponseMetadata({
+            messageId,
+            type: this.type,
+            originalType: this.type,
+            fromStreaming: true,
+            metadata: this.chatCompletionResponseMetadata,
+        });
         await saveChatConditional();
 
         playMessageSound();
@@ -3845,7 +3887,7 @@ class StreamingProcessor {
     }
 
     /**
-     * @returns {AsyncGenerator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any }, void, void>}
+     * @returns {AsyncGenerator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any, usage?: object, responseMetadata?: object }, void, void>}
      */
     async* nullStreamingGeneration() {
         throw new Error('Generation function for streaming is not hooked up');
@@ -3867,7 +3909,7 @@ class StreamingProcessor {
         try {
             const sw = new Stopwatch(1000 / power_user.streaming_fps);
             const timestamps = [];
-            for await (const { text, swipes, logprobs, toolCalls, state, usage } of this.generator()) {
+            for await (const { text, swipes, logprobs, toolCalls, state, usage, responseMetadata } of this.generator()) {
                 const now = Date.now();
                 timestamps.push(now);
                 if (!this.timeToFirstToken) {
@@ -3879,6 +3921,9 @@ class StreamingProcessor {
 
                 if (usage) {
                     this.apiUsage = usage;
+                }
+                if (responseMetadata) {
+                    this.chatCompletionResponseMetadata = responseMetadata;
                 }
 
                 this.toolCalls = toolCalls;
@@ -5488,6 +5533,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         let imageUrls = extractImagesFromData(data);
         const reasoningSignature = extractReasoningSignatureFromData(data);
         const apiUsage = data?.usage ?? data?.usageMetadata ?? data?.meta?.tokens ?? data?.meta?.billed_units ?? null;
+        const responseMetadata = extractChatCompletionResponseMetadata(data, apiUsage);
         kobold_horde_model = title;
 
         const swipes = extractMultiSwipes(data, type);
@@ -5520,6 +5566,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             displayIncompleteSentences: displayIncomplete,
         });
 
+        let savedMessageId = null;
+        let savedType = null;
+
         if (isImpersonate) {
             $('#send_textarea').val(getMessage)[0].dispatchEvent(new Event('input', { bubbles: true }));
             await eventSource.emit(event_types.IMPERSONATE_READY, getMessage);
@@ -5533,6 +5582,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             } else {
                 ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, apiUsage }));
             }
+            savedMessageId = chat.length - 1;
+            savedType = type;
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
             parseAndSaveLogprobs(data, continue_mag);
@@ -5570,6 +5621,13 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         }
 
         console.debug('/api/chats/save called by /Generate');
+        await emitChatCompletionResponseMetadata({
+            messageId: savedMessageId,
+            type: savedType ?? type,
+            originalType,
+            fromStreaming: false,
+            metadata: responseMetadata,
+        });
         await saveChatConditional();
         unblockGeneration(type);
         streamingProcessor = null;
