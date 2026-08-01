@@ -2226,7 +2226,10 @@ router.post('/generate', async function (request, response) {
             apiUrl = 'https://openrouter.ai/api/v1';
             apiKey = readSecret(request.user.directories, SECRET_KEYS.OPENROUTER, request.body.secret_id);
             // OpenRouter needs to pass the Referer and X-Title: https://openrouter.ai/docs#requests
-            headers = { ...OPENROUTER_HEADERS };
+            headers = {
+                ...OPENROUTER_HEADERS,
+                'X-OpenRouter-Metadata': 'enabled',
+            };
             const includeReasoning = Boolean(request.body.include_reasoning);
             bodyParams = {
                 transforms: getOpenRouterTransforms(request),

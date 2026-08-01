@@ -3,6 +3,7 @@ const MAX_ARRAY_LENGTH = 32;
 const MAX_STRING_LENGTH = 512;
 const SENSITIVE_KEY_PATTERN = /(?:account|team|payment|invoice|customer|email|api[_-]?key|secret|credential|wallet|balance|credit|subscription|organization|org_id)/i;
 const UNSAFE_PAYLOAD_KEY_PATTERN = /(?:choices|messages?|headers?|request[_-]?body|body)/i;
+const PROVIDER_METADATA_KEYS = new Set(['openrouter_metadata']);
 
 function isRecord(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -80,7 +81,8 @@ export function extractChatCompletionResponseMetadata(data, usage = null) {
 
     if (isRecord(data)) {
         for (const [key, value] of Object.entries(data)) {
-            if (!key.startsWith('x_') || SENSITIVE_KEY_PATTERN.test(key) || UNSAFE_PAYLOAD_KEY_PATTERN.test(key)) {
+            const isProviderMetadata = key.startsWith('x_') || PROVIDER_METADATA_KEYS.has(key);
+            if (!isProviderMetadata || SENSITIVE_KEY_PATTERN.test(key) || UNSAFE_PAYLOAD_KEY_PATTERN.test(key)) {
                 continue;
             }
 

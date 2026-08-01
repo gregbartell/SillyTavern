@@ -32,6 +32,58 @@ describe('chat completion response metadata', () => {
         });
     });
 
+    test('extracts OpenRouter usage and routing metadata', () => {
+        const metadata = extractChatCompletionResponseMetadata({
+            usage: {
+                prompt_tokens: 12,
+                completion_tokens: 4,
+                cost: 0.00042,
+                cost_details: { upstream_inference_cost: 0.0004 },
+            },
+            openrouter_metadata: {
+                requested: 'openai/gpt-4o-mini',
+                strategy: 'direct',
+                region: 'iad',
+                endpoints: {
+                    total: 1,
+                    available: [{ provider: 'OpenAI', model: 'openai/gpt-4o-mini', selected: true }],
+                },
+            },
+        });
+
+        expect(metadata).toEqual({
+            usage: {
+                prompt_tokens: 12,
+                completion_tokens: 4,
+                cost: 0.00042,
+                cost_details: { upstream_inference_cost: 0.0004 },
+            },
+            providerMetadata: {
+                openrouter_metadata: {
+                    requested: 'openai/gpt-4o-mini',
+                    strategy: 'direct',
+                    region: 'iad',
+                    endpoints: {
+                        total: 1,
+                        available: [{ provider: 'OpenAI', model: 'openai/gpt-4o-mini', selected: true }],
+                    },
+                },
+            },
+        });
+    });
+
+    test('keeps OpenRouter usage when routing metadata is absent', () => {
+        const metadata = extractChatCompletionResponseMetadata({
+            usage: { prompt_tokens: 12, completion_tokens: 4, cost: 0.00042 },
+        });
+
+        expect(metadata).toEqual({
+            usage: { prompt_tokens: 12, completion_tokens: 4, cost: 0.00042 },
+            providerMetadata: {},
+        });
+        expect(hasChatCompletionResponseMetadata(metadata)).toBe(true);
+    });
+
     test('ignores non-x response payload such as choices', () => {
         const metadata = extractChatCompletionResponseMetadata({
             choices: [{ message: { content: 'secret response' } }],
@@ -97,6 +149,63 @@ describe('chat completion response metadata', () => {
             providerMetadata: {
                 x_nanogpt_cache: { cache_read_tokens: 2 },
                 x_nanogpt_pricing: { amount: '0.000004' },
+            },
+        });
+    });
+
+    test('merges OpenRouter metadata from the terminal streaming chunk', () => {
+        const initial = extractChatCompletionResponseMetadata({
+            choices: [{ delta: { content: 'hello' } }],
+        });
+        const terminal = extractChatCompletionResponseMetadata({
+            usage: { prompt_tokens: 10, completion_tokens: 2, cost: 0.0002 },
+            openrouter_metadata: {
+                strategy: 'fallback',
+                attempt: 2,
+                attempts: [
+                    { provider: 'Provider A', model: 'example/model', status: 429 },
+                    { provider: 'Provider B', model: 'example/model', status: 200 },
+                ],
+            },
+        });
+
+        expect(mergeChatCompletionResponseMetadata(initial, terminal)).toEqual({
+            usage: { prompt_tokens: 10, completion_tokens: 2, cost: 0.0002 },
+            providerMetadata: {
+                openrouter_metadata: {
+                    strategy: 'fallback',
+                    attempt: 2,
+                    attempts: [
+                        { provider: 'Provider A', model: 'example/model', status: 429 },
+                        { provider: 'Provider B', model: 'example/model', status: 200 },
+                    ],
+                },
+            },
+        });
+    });
+
+    test('sanitizes sensitive fields inside OpenRouter metadata', () => {
+        const metadata = extractChatCompletionResponseMetadata({
+            openrouter_metadata: {
+                strategy: 'direct',
+                account_id: 'acct-1',
+                pipeline: [{
+                    type: 'guardrail',
+                    data: {
+                        email: 'user@example.com',
+                        blocked: false,
+                    },
+                }],
+            },
+        });
+
+        expect(metadata.providerMetadata).toEqual({
+            openrouter_metadata: {
+                strategy: 'direct',
+                pipeline: [{
+                    type: 'guardrail',
+                    data: { blocked: false },
+                }],
             },
         });
     });
