@@ -78,6 +78,7 @@ import { renderTemplateAsync } from './templates.js';
 import { SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
+import { extractOpenRouterResponseMetadata } from './chat-completion-metadata.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
@@ -3144,6 +3145,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     }
 
     const model = getChatCompletionModel(oai_settings);
+    const source = oai_settings.chat_completion_source;
     const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(oai_settings, model, type, messages, { jsonSchema });
     await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, generate_data);
 
@@ -3167,6 +3169,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             let text = '';
             const swipes = [];
             const toolCalls = [];
+            let responseMetadata = extractOpenRouterResponseMetadata(null, source, model);
             const state = { reasoning: '', images: [], signature: '', toolSignatures: {} };
             while (true) {
                 const { done, value } = await reader.read();
@@ -3175,6 +3178,9 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
                 if (rawData === '[DONE]') return;
                 tryParseStreamingError(response, rawData);
                 const parsed = JSON.parse(rawData);
+                if (parsed.usage) {
+                    responseMetadata = extractOpenRouterResponseMetadata(parsed, source, model);
+                }
 
                 if (canMultiSwipe && Array.isArray(parsed?.choices) && parsed?.choices?.[0]?.index > 0) {
                     const swipeIndex = parsed.choices[0].index - 1;
@@ -3186,7 +3192,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
 
                 ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures);
 
-                yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
+                yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state, responseMetadata };
             }
         };
     } else {
@@ -3208,7 +3214,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             delay(1).then(() => saveLogprobsForActiveMessage(logprobs, null));
         }
 
-        return data;
+        return { ...data, responseMetadata: extractOpenRouterResponseMetadata(data, source, model) };
     }
 }
 

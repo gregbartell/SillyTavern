@@ -288,6 +288,7 @@ import { addChatBackupsBrowser } from './scripts/chat-backups.js';
 import { onboardingExperimentalMacroEngine } from './scripts/macros/engine/MacroDiagnostics.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
+import { extractOpenRouterResponseMetadata } from './scripts/chat-completion-metadata.js';
 
 // API OBJECT FOR EXTERNAL WIRING
 globalThis.SillyTavern = {
@@ -3537,6 +3538,24 @@ function hideStopButton() {
     }
 }
 
+/** Emits billing metadata only after the response has an associated saved message. */
+async function emitChatCompletionResponseMetadata(messageId, type, originalType, fromStreaming, metadata) {
+    const message = chat[messageId];
+    if (metadata === undefined || !Number.isInteger(messageId) || !message || message.is_user || message.is_system || originalType === 'impersonate') {
+        return;
+    }
+    await eventSource.emit(event_types.CHAT_COMPLETION_RESPONSE_METADATA, {
+        // A null payload marks an unpriced saved response from another API.
+        chatCompletionSource: null, model: null, usage: null, providerMetadata: {},
+        ...metadata,
+        messageId,
+        swipeId: Number.isInteger(message.swipe_id) ? message.swipe_id : null,
+        type,
+        originalType,
+        fromStreaming,
+    });
+}
+
 class StreamingProcessor {
     /**
      * Creates a new streaming processor.
@@ -3583,6 +3602,9 @@ class StreamingProcessor {
         this.images = [];
         /** @type {string?} */
         this.reasoningSignature = null;
+        this.responseMetadata = main_api === 'openai'
+            ? extractOpenRouterResponseMetadata(null, oai_settings.chat_completion_source, getChatCompletionModel(oai_settings))
+            : null;
     }
 
     /**
@@ -3760,6 +3782,9 @@ class StreamingProcessor {
 
         await this.reasoningHandler.finish(messageId);
 
+        await emitChatCompletionResponseMetadata(messageId, this.type, this.type, true, this.responseMetadata);
+        this.responseMetadata = undefined;
+
         if (Array.isArray(this.swipes) && this.swipes.length > 0) {
             const swipeInfoExtra = structuredClone(message.extra ?? {});
             delete swipeInfoExtra.token_count;
@@ -3850,7 +3875,7 @@ class StreamingProcessor {
     }
 
     /**
-     * @returns {AsyncGenerator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any }, void, void>}
+     * @returns {AsyncGenerator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[], state: any, responseMetadata?: object }, void, void>}
      */
     async* nullStreamingGeneration() {
         throw new Error('Generation function for streaming is not hooked up');
@@ -3872,7 +3897,7 @@ class StreamingProcessor {
         try {
             const sw = new Stopwatch(1000 / power_user.streaming_fps);
             const timestamps = [];
-            for await (const { text, swipes, logprobs, toolCalls, state } of this.generator()) {
+            for await (const { text, swipes, logprobs, toolCalls, state, responseMetadata } of this.generator()) {
                 const now = Date.now();
                 timestamps.push(now);
                 if (!this.timeToFirstToken) {
@@ -3882,6 +3907,7 @@ class StreamingProcessor {
                     return this.result;
                 }
 
+                if (responseMetadata) this.responseMetadata = responseMetadata;
                 this.toolCalls = toolCalls;
                 this.result = text;
                 this.swipes = Array.from(swipes ?? []);
@@ -3901,6 +3927,8 @@ class StreamingProcessor {
             // in the case of a self-inflicted abort, we have already cleaned up
             if (!this.isFinished) {
                 console.error(err);
+                await emitChatCompletionResponseMetadata(this.messageId, this.type, this.type, true, this.responseMetadata);
+                this.responseMetadata = undefined;
                 this.onErrorStreaming();
             }
             return this.result;
@@ -5529,9 +5557,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else {
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, responseMetadata: data.responseMetadata ?? null, originalType }));
             } else {
-                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature }));
+                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, responseMetadata: data.responseMetadata ?? null, originalType }));
             }
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
@@ -6634,12 +6662,14 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string} [reasoning] Message reasoning
  * @property {string[]} [imageUrls] Links to images
  * @property {string?} [reasoningSignature] Encrypted signature of the reasoning text
+ * @property {object|null} [responseMetadata] Billing metadata; null marks an unpriced response
+ * @property {string} [originalType] Generation type before continuation normalization
  *
  * @typedef {object} SaveReplyResult
  * @property {string} type Type of generation
  * @property {string} getMessage Generated message
  */
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, responseMetadata = undefined, originalType = type }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
@@ -6688,11 +6718,13 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
                 lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
             }
             const chat_id = (chat.length - 1);
+            !fromStreaming && await emitChatCompletionResponseMetadata(chat_id, type, originalType, false, responseMetadata);
             !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
             addOneMessage(chat[chat_id], { type: 'swipe' });
             !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
         } else {
             lastMessage.mes = getMessage;
+            !fromStreaming && await emitChatCompletionResponseMetadata(chat.length - 1, type, originalType, false, responseMetadata);
         }
     } else if (type === 'append' || type === 'continue') {
         console.debug('Trying to append.');
@@ -6713,6 +6745,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
         }
         const chat_id = (chat.length - 1);
+        !fromStreaming && await emitChatCompletionResponseMetadata(chat_id, type, originalType, false, responseMetadata);
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
         addOneMessage(chat[chat_id], { type: 'swipe' });
         !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
@@ -6735,6 +6768,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.token_count = await getTokenCountAsync(tokenCountText, 0);
         }
         const chat_id = (chat.length - 1);
+        !fromStreaming && await emitChatCompletionResponseMetadata(chat_id, type, originalType, false, responseMetadata);
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
         addOneMessage(chat[chat_id], { type: 'swipe' });
         !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
@@ -6778,6 +6812,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         await processImageAttachment(newMessage, { imageUrls });
         const chat_id = (chat.length - 1);
 
+        !fromStreaming && await emitChatCompletionResponseMetadata(chat_id, type, originalType, false, responseMetadata);
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
         addOneMessage(chat[chat_id]);
         !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
